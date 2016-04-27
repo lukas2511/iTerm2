@@ -141,6 +141,7 @@
                                 </connections>
                             </menuItem>
                             <menuItem title="Split Horizontally with Current Profile" keyEquivalent="D" id="1201">
+                                <modifierMask key="keyEquivalentModifierMask" option="YES" command="YES" control="YES"/>
                                 <connections>
                                     <action selector="splitHorizontally:" target="-1" id="1203"/>
                                 </connections>
@@ -253,19 +254,16 @@
                                 <menu key="submenu" title="tmux" id="1449">
                                     <items>
                                         <menuItem title="Detach" alternate="YES" keyEquivalent="D" id="1459">
-                                            <modifierMask key="keyEquivalentModifierMask" control="YES" command="YES"/>
                                             <connections>
                                                 <action selector="detachTmux:" target="-1" id="1460"/>
                                             </connections>
                                         </menuItem>
                                         <menuItem title="New Window" alternate="YES" keyEquivalent="N" id="1455">
-                                            <modifierMask key="keyEquivalentModifierMask" control="YES" command="YES"/>
                                             <connections>
                                                 <action selector="newTmuxWindow:" target="-1" id="1456"/>
                                             </connections>
                                         </menuItem>
                                         <menuItem title="New Tab" alternate="YES" keyEquivalent="T" id="1452">
-                                            <modifierMask key="keyEquivalentModifierMask" control="YES" command="YES"/>
                                             <connections>
                                                 <action selector="newTmuxTab:" target="-1" id="1453"/>
                                             </connections>
@@ -274,7 +272,7 @@
                                             <string key="keyEquivalent" base64-UTF8="YES">
 DQ
 </string>
-                                            <modifierMask key="keyEquivalentModifierMask" shift="YES" control="YES" command="YES"/>
+                                            <modifierMask key="keyEquivalentModifierMask" shift="YES" command="YES"/>
                                             <connections>
                                                 <action selector="openDashboard:" target="-1" id="1463"/>
                                             </connections>
@@ -651,6 +649,7 @@ DQ
                     <menu key="submenu" title="View" id="803">
                         <items>
                             <menuItem title="Show Tabs in Fullscreen" keyEquivalent="T" id="1257">
+                                <modifierMask key="keyEquivalentModifierMask" control="YES" command="YES"/>
                                 <connections>
                                     <action selector="toggleFullScreenTabBar:" target="-1" id="1259"/>
                                 </connections>
