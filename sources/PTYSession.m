@@ -74,7 +74,7 @@
 #include <sys/time.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#import <CoreFoundation/CoreFoundation.h>
+
 
 // The format for a user defaults key that recalls if the user has already been pestered about
 // outdated key mappings for a give profile. The %@ is replaced with the profile's GUID.
@@ -1347,8 +1347,8 @@ ITERM_WEAKLY_REFERENCEABLE
                     isUTF8:isUTF8];
     NSString *initialText = _profile[KEY_INITIAL_TEXT];
     if ([initialText length]) {
-        [self writeTaskNoBroadcast:initialText];
-        [self writeTaskNoBroadcast:@"\n"];
+        [_shell writeTask:[initialText dataUsingEncoding:[self encoding]]];
+        [_shell writeTask:[@"\n" dataUsingEncoding:[self encoding]]];
     }
 }
 
@@ -1578,26 +1578,21 @@ ITERM_WEAKLY_REFERENCEABLE
     }
 }
 
-// This does not handle tmux properly. Any writing to tmux should happen in a
-// caller. It does handle braodcasting to other sessions.
-- (void)writeTaskImpl:(NSString *)string
-             encoding:(NSStringEncoding)optionalEncoding
-        forceEncoding:(BOOL)forceEncoding
-         canBroadcast:(BOOL)canBroadcast {
-    const NSStringEncoding encoding = forceEncoding ? optionalEncoding : _terminal.encoding;
+- (void)writeTaskImpl:(NSData *)data canBroadcast:(BOOL)canBroadcast {
     if (gDebugLogging) {
         NSArray *stack = [NSThread callStackSymbols];
-        DLog(@"writeTaskImpl session=%@ encoding=%@ forceEncoding=%@ canBroadcast=%@: called from %@",
-             self, @(encoding), @(forceEncoding), @(canBroadcast), stack);
-        DLog(@"writeTaskImpl string=%@", string);
+        DLog(@"writeTaskImpl session=%@ canBroadcast=%@: called from %@", self, @(canBroadcast), stack);
+        const char *bytes = [data bytes];
+        for (int i = 0; i < [data length]; i++) {
+            DLog(@"writeTask keydown %d: %d (%c)", i, (int)bytes[i], bytes[i]);
+        }
     }
 
     // check if we want to send this input to all the sessions
     if (canBroadcast && [[_delegate realParentWindow] broadcastInputToSession:self]) {
-        // Ask the parent window to write to the other tasks.
-        [[_delegate realParentWindow] sendInputToAllSessions:string
-                                                    encoding:optionalEncoding
-                                               forceEncoding:forceEncoding];
+        // Ask the parent window to write directly to the PTYTask of all
+        // sessions being broadcasted to.
+        [[_delegate realParentWindow] sendInputToAllSessions:data];
     } else if (!_exited) {
         // Send to only this session
         if (canBroadcast) {
@@ -1608,31 +1603,18 @@ ITERM_WEAKLY_REFERENCEABLE
             PTYScroller *verticalScroller = [_view.scrollview verticalScroller];
             [verticalScroller setUserScroll:NO];
         }
-        NSData *data = [string dataUsingEncoding:encoding allowLossyConversion:YES];
-        const char *bytes = data.bytes;
-        for (NSUInteger i = 0; i < data.length; i++) {
-            DLog(@"Write byte 0x%02x (%c)", (((int)bytes[i]) & 0xff), bytes[i]);
-        }
         [_shell writeTask:data];
     }
 }
 
-
-- (void)writeTaskNoBroadcast:(NSString *)string {
-    [self writeTaskNoBroadcast:string encoding:_terminal.encoding forceEncoding:NO];
-}
-
-- (void)writeTaskNoBroadcast:(NSString *)string
-                    encoding:(NSStringEncoding)encoding
-               forceEncoding:(BOOL)forceEncoding {
+- (void)writeTaskNoBroadcast:(NSData *)data
+{
     if (self.tmuxMode == TMUX_CLIENT) {
-        // tmux doesn't allow us to abuse the encoding, so this can cause the wrong thing to be
-        // sent (e.g., in mouse reporting).
-        [[_tmuxController gateway] sendKeys:string
+        [[_tmuxController gateway] sendKeys:data
                                toWindowPane:_tmuxPane];
         return;
     }
-    [self writeTaskImpl:string encoding:encoding forceEncoding:forceEncoding canBroadcast:NO];
+    [self writeTaskImpl:data canBroadcast:NO];
 }
 
 - (void)handleKeypressInTmuxGateway:(unichar)unicode
@@ -1664,44 +1646,14 @@ ITERM_WEAKLY_REFERENCEABLE
     }
 }
 
-- (void)writeLatin1EncodedData:(NSData *)data broadcastAllowed:(BOOL)broadcast {
-    // `data` contains raw bytes we want to pass through. I believe Latin-1 is the only encoding that
-    // won't perform any transformation when converting from data to string. This is needed because
-    // sometimes the user wants to send particular bytes regardless of the encoding (e.g., the
-    // "send hex codes" keybinding action, or certain mouse reporting modes that abuse encodings).
-    // This won't work for non-UTF-8 data with tmux.
-    NSString *string = [[[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding] autorelease];
-    if (broadcast) {
-        [self writeTask:string encoding:NSISOLatin1StringEncoding forceEncoding:YES];
-    } else {
-        [self writeTaskNoBroadcast:string encoding:NSISOLatin1StringEncoding forceEncoding:YES];
-    }
-}
-
-- (void)writeStringWithLatin1Encoding:(NSString *)string {
-    [self writeTask:string encoding:NSISOLatin1StringEncoding forceEncoding:YES];
-}
-
-- (void)writeTask:(NSString *)string {
-    [self writeTask:string encoding:_terminal.encoding forceEncoding:NO];
-}
-
-// If forceEncoding is YES then optionalEncoding will be used regardless of the session's preferred
-// encoding. If it is NO then the preferred encoding is used. This is necessary because this method
-// might send the string off to the window to get broadcast to other sessions which might have
-// different encodings.
-- (void)writeTask:(NSString *)string
-         encoding:(NSStringEncoding)optionalEncoding
-    forceEncoding:(BOOL)forceEncoding {
-    NSStringEncoding encoding = forceEncoding ? optionalEncoding : _terminal.encoding;
+- (void)writeTask:(NSData*)data
+{
     if (self.tmuxMode == TMUX_CLIENT) {
         [self setBell:NO];
         if ([[_delegate realParentWindow] broadcastInputToSession:self]) {
-            [[_delegate realParentWindow] sendInputToAllSessions:string
-                                                        encoding:optionalEncoding
-                                                   forceEncoding:forceEncoding];
+            [[_delegate realParentWindow] sendInputToAllSessions:data];
         } else {
-            [[_tmuxController gateway] sendKeys:string
+            [[_tmuxController gateway] sendKeys:data
                                    toWindowPane:_tmuxPane];
         }
         PTYScroller* ptys = (PTYScroller*)[_view.scrollview verticalScroller];
@@ -1709,14 +1661,15 @@ ITERM_WEAKLY_REFERENCEABLE
         return;
     } else if (self.tmuxMode == TMUX_GATEWAY) {
         // Use keypresses for tmux gateway commands for development and debugging.
-        for (int i = 0; i < string.length; i++) {
-            unichar unicode = [string characterAtIndex:i];
+        NSString *s = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
+        for (int i = 0; i < s.length; i++) {
+            unichar unicode = [s characterAtIndex:i];
             [self handleKeypressInTmuxGateway:unicode];
         }
         return;
     }
     self.currentMarkOrNotePosition = nil;
-    [self writeTaskImpl:string encoding:encoding forceEncoding:forceEncoding canBroadcast:YES];
+    [self writeTaskImpl:data canBroadcast:YES];
 }
 
 - (void)taskWasDeregistered {
@@ -1974,8 +1927,7 @@ ITERM_WEAKLY_REFERENCEABLE
 - (void)writeForCoprocessOnlyTask:(NSData *)data {
     // The if statement is just a sanity check.
     if (self.tmuxMode == TMUX_CLIENT) {
-        NSString *string = [[[NSString alloc] initWithData:data encoding:self.encoding] autorelease];
-        [self writeTask:string];
+        [self writeTask:data];
     }
 }
 
@@ -2285,55 +2237,82 @@ ITERM_WEAKLY_REFERENCEABLE
 {
 }
 
-- (void)insertNewline:(id)sender {
+- (void)insertNewline:(id)sender
+{
     [self insertText:@"\n"];
 }
 
-- (void)insertTab:(id)sender {
+- (void)insertTab:(id)sender
+{
     [self insertText:@"\t"];
 }
 
-- (void)moveUp:(id)sender {
-    [self writeLatin1EncodedData:[_terminal.output keyArrowUp:0] broadcastAllowed:YES];
+- (void)moveUp:(id)sender
+{
+    [self writeTask:[_terminal.output keyArrowUp:0]];
 }
 
-- (void)moveDown:(id)sender {
-    [self writeLatin1EncodedData:[_terminal.output keyArrowDown:0] broadcastAllowed:YES];
+- (void)moveDown:(id)sender
+{
+    [self writeTask:[_terminal.output keyArrowDown:0]];
 }
 
-- (void)moveLeft:(id)sender {
-    [self writeLatin1EncodedData:[_terminal.output keyArrowLeft:0] broadcastAllowed:YES];
+- (void)moveLeft:(id)sender
+{
+    [self writeTask:[_terminal.output keyArrowLeft:0]];
 }
 
-- (void)moveRight:(id)sender {
-    [self writeLatin1EncodedData:[_terminal.output keyArrowRight:0] broadcastAllowed:YES];
+- (void)moveRight:(id)sender
+{
+    [self writeTask:[_terminal.output keyArrowRight:0]];
 }
 
-- (void)pageUp:(id)sender {
-    [self writeLatin1EncodedData:[_terminal.output keyPageUp:0] broadcastAllowed:YES];
+- (void)pageUp:(id)sender
+{
+    [self writeTask:[_terminal.output keyPageUp:0]];
 }
 
-- (void)pageDown:(id)sender {
-    [self writeLatin1EncodedData:[_terminal.output keyPageDown:0] broadcastAllowed:YES];
+- (void)pageDown:(id)sender
+{
+    [self writeTask:[_terminal.output keyPageDown:0]];
 }
 
 + (NSString*)pasteboardString {
     return [NSString stringFromPasteboard];
 }
 
-- (void)insertText:(NSString *)string {
+- (void)insertText:(NSString *)string
+{
+    NSData *data;
+    NSMutableString *mstring;
+    int i;
+    int max;
+
     if (_exited) {
         return;
     }
 
-    // Note: there used to be a weird special case where 0xa5 got converted to
-    // backslash. I think it was based on a misunderstanding of how encodings
-    // work and it should've been removed like 10 years ago.
-    if (string != nil) {
-        if (gDebugLogging) {
-            DebugLog([NSString stringWithFormat:@"writeTask:%@", string]);
+    mstring = [NSMutableString stringWithString:string];
+    max = [string length];
+    for (i = 0; i < max; i++) {
+        // From http://lists.apple.com/archives/cocoa-dev/2001/Jul/msg00114.html
+        // in MacJapanese, the backslash char (ASCII 0xdC) is mapped to Unicode 0xA5.
+        // The following line gives you NSString containing an Unicode character Yen sign (0xA5) in Japanese localization.
+        // string = [NSString stringWithCString:"\"];
+        // TODO: Check the locale before doing this.
+        if ([mstring characterAtIndex:i] == 0xa5) {
+            [mstring replaceCharactersInRange:NSMakeRange(i, 1) withString:@"\\"];
         }
-        [self writeTask:string];
+    }
+
+    data = [mstring dataUsingEncoding:[_terminal encoding]
+                 allowLossyConversion:YES];
+
+    if (data != nil) {
+        if (gDebugLogging) {
+            DebugLog([NSString stringWithFormat:@"writeTask:%@", data]);
+        }
+        [self writeTask:data];
     }
 }
 
@@ -2361,16 +2340,18 @@ ITERM_WEAKLY_REFERENCEABLE
     [self pasteString:aString flags:0];
 }
 
-- (void)deleteBackward:(id)sender {
+- (void)deleteBackward:(id)sender
+{
     unsigned char p = 0x08; // Ctrl+H
 
-    [self writeLatin1EncodedData:[NSData dataWithBytes:&p length:1] broadcastAllowed:YES];
+    [self writeTask:[NSData dataWithBytes:&p length:1]];
 }
 
-- (void)deleteForward:(id)sender {
+- (void)deleteForward:(id)sender
+{
     unsigned char p = 0x7F; // DEL
 
-    [self writeLatin1EncodedData:[NSData dataWithBytes:&p length:1] broadcastAllowed:YES];
+    [self writeTask:[NSData dataWithBytes:&p length:1]];
 }
 
 - (PTYScroller *)textViewVerticalScroller {
@@ -3276,6 +3257,21 @@ ITERM_WEAKLY_REFERENCEABLE
     [[_delegate realParentWindow] updateTabColors];
 }
 
+- (void)sendCommand:(NSString *)command
+{
+    NSData *data = nil;
+    NSString *aString = nil;
+
+    if (command != nil) {
+        aString = [NSString stringWithFormat:@"%@\n", command];
+        data = [aString dataUsingEncoding:[_terminal encoding]];
+    }
+
+    if (data != nil) {
+        [self writeTask:data];
+    }
+}
+
 - (NSDictionary *)arrangement {
     return [self arrangementWithContents:NO];
 }
@@ -3523,8 +3519,7 @@ ITERM_WEAKLY_REFERENCEABLE
     NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
 
     if (now >= _lastInput + _antiIdlePeriod - kAntiIdleGracePeriod) {
-        [self writeLatin1EncodedData:[NSData dataWithBytes:&_antiIdleCode length:1]
-                 broadcastAllowed:NO];
+        [_shell writeTask:[NSData dataWithBytes:&_antiIdleCode length:1]];
         _lastInput = now;
     }
 }
@@ -3923,8 +3918,8 @@ ITERM_WEAKLY_REFERENCEABLE
         // Try to figure out if we're at a shell prompt. Send a space character and immediately
         // backspace over it. If no output is received within a specified timeout, then go ahead and
         // send the password. Otherwise, ask for confirmation.
-        [self writeTaskNoBroadcast:@" "];
-        [self writeLatin1EncodedData:backspace broadcastAllowed:NO];
+        [self writeTask:[@" " dataUsingEncoding:self.encoding]];
+        [self writeTask:backspace];
         _bytesReceivedSinceSendingEchoProbe = 0;
         [self performSelector:@selector(enterPasswordIfEchoProbeOk:)
                    withObject:password
@@ -3951,8 +3946,8 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 - (void)enterPasswordNoProbe:(NSString *)password {
-    [self writeTaskNoBroadcast:password];
-    [self writeTaskNoBroadcast:@"\n"];
+    [self writeTask:[password dataUsingEncoding:self.encoding]];
+    [self writeTask:[@"\n" dataUsingEncoding:self.encoding]];
 }
 
 - (NSImage *)dragImage
@@ -4020,7 +4015,7 @@ ITERM_WEAKLY_REFERENCEABLE
     if (focused != _focused) {
         _focused = focused;
         if ([_terminal reportFocus]) {
-            [self writeLatin1EncodedData:[_terminal.output reportFocusGained:focused] broadcastAllowed:NO];
+            [self writeTask:[_terminal.output reportFocusGained:focused]];
         }
     }
 }
@@ -4370,19 +4365,19 @@ ITERM_WEAKLY_REFERENCEABLE
     _tmuxSecureLogging = secureLogging;
 }
 
-- (void)tmuxWriteString:(NSString *)string {
+- (void)tmuxWriteData:(NSData *)data {
     if (_exited) {
         return;
     }
     if (_tmuxSecureLogging) {
         DLog(@"Write to tmux.");
     } else {
-        DLog(@"Write to tmux: \"%@\"", string);
+        DLog(@"Write to tmux: \"%@\"", [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease]);
     }
     if (_tmuxGateway.tmuxLogging) {
-        [self printTmuxMessage:string];
+        [self printTmuxMessage:[[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease]];
     }
-    [self writeTaskImpl:string encoding:NSUTF8StringEncoding forceEncoding:YES canBroadcast:NO];
+    [self writeTaskImpl:data canBroadcast:YES];
 }
 
 + (dispatch_queue_t)tmuxQueue {
@@ -4727,13 +4722,13 @@ ITERM_WEAKLY_REFERENCEABLE
                 if (_exited || isTmuxGateway) {
                     return;
                 }
-                [self writeStringWithLatin1Encoding:@"\010"];
+                [self writeTask:[@"\010" dataUsingEncoding:NSUTF8StringEncoding]];
                 break;
             case KEY_ACTION_SEND_C_QM_BACKSPACE:
                 if (_exited || isTmuxGateway) {
                     return;
                 }
-                [self writeStringWithLatin1Encoding:@"\177"]; // decimal 127
+                [self writeTask:[@"\177" dataUsingEncoding:NSUTF8StringEncoding]]; // decimal 127
                 break;
             case KEY_ACTION_IGNORE:
                 break;
@@ -5081,13 +5076,13 @@ ITERM_WEAKLY_REFERENCEABLE
                 char c = send_pchr;
                 dataPtr = (unsigned char*)&c;
                 dataLength = 1;
-                [self writeLatin1EncodedData:[NSData dataWithBytes:dataPtr length:dataLength] broadcastAllowed:YES];
+                [self writeTask:[NSData dataWithBytes:dataPtr length:dataLength]];
             }
             
             if (send_str != NULL) {
                 dataPtr = send_str;
                 dataLength = send_strlen;
-                [self writeLatin1EncodedData:[NSData dataWithBytes:dataPtr length:dataLength] broadcastAllowed:YES];
+                [self writeTask:[NSData dataWithBytes:dataPtr length:dataLength]];
             }
         }
     }
@@ -5508,10 +5503,9 @@ ITERM_WEAKLY_REFERENCEABLE
                 case MOUSE_REPORTING_ALL_MOTION:
                     _reportingMouseDown = YES;
                     _lastReportedCoord = coord;
-                    [self writeLatin1EncodedData:[_terminal.output mousePress:button
-                                                                withModifiers:modifiers
-                                                                           at:coord]
-                             broadcastAllowed:NO];
+                    [self writeTask:[_terminal.output mousePress:button
+                                                   withModifiers:modifiers
+                                                              at:coord]];
                     return YES;
 
                 case MOUSE_REPORTING_NONE:
@@ -5532,10 +5526,9 @@ ITERM_WEAKLY_REFERENCEABLE
                     case MOUSE_REPORTING_BUTTON_MOTION:
                     case MOUSE_REPORTING_ALL_MOTION:
                         _lastReportedCoord = coord;
-                        [self writeLatin1EncodedData:[_terminal.output mouseRelease:button
-                                                                      withModifiers:modifiers
-                                                                                 at:coord]
-                                 broadcastAllowed:NO];
+                        [self writeTask:[_terminal.output mouseRelease:button
+                                                         withModifiers:modifiers
+                                                                    at:coord]];
                         return YES;
 
                     case MOUSE_REPORTING_NONE:
@@ -5550,10 +5543,9 @@ ITERM_WEAKLY_REFERENCEABLE
             if ([_terminal mouseMode] == MOUSE_REPORTING_ALL_MOTION &&
                 !VT100GridCoordEquals(coord, _lastReportedCoord)) {
                 _lastReportedCoord = coord;
-                [self writeLatin1EncodedData:[_terminal.output mouseMotion:MOUSE_BUTTON_NONE
-                                                             withModifiers:modifiers
-                                                                        at:coord]
-                         broadcastAllowed:NO];
+                [self writeTask:[_terminal.output mouseMotion:MOUSE_BUTTON_NONE
+                                                withModifiers:modifiers
+                                                           at:coord]];
                 return YES;
             }
             break;
@@ -5568,10 +5560,9 @@ ITERM_WEAKLY_REFERENCEABLE
                 switch ([_terminal mouseMode]) {
                     case MOUSE_REPORTING_BUTTON_MOTION:
                     case MOUSE_REPORTING_ALL_MOTION:
-                        [self writeLatin1EncodedData:[_terminal.output mouseMotion:button
-                                                                     withModifiers:modifiers
-                                                                                at:coord]
-                                 broadcastAllowed:NO];
+                        [self writeTask:[_terminal.output mouseMotion:button
+                                                        withModifiers:modifiers
+                                                                   at:coord]];
                         // Fall through
                     case MOUSE_REPORTING_NORMAL:
                         // Don't do selection when mouse reporting during a drag, even if the drag
@@ -5595,15 +5586,13 @@ ITERM_WEAKLY_REFERENCEABLE
                             // This works around what I believe is a bug in tmux or a bug in
                             // how users use tmux. See the thread on tmux-users with subject
                             // "Mouse wheel events and server_client_assume_paste--the perfect storm of bugs?".
-                            [self writeLatin1EncodedData:[_terminal.output mousePress:button
-                                                                        withModifiers:modifiers
-                                                                                   at:coord]
-                                     broadcastAllowed:NO];
+                            [self writeTask:[_terminal.output mousePress:button
+                                                           withModifiers:modifiers
+                                                                      at:coord]];
                         }
-                        [self writeLatin1EncodedData:[_terminal.output mousePress:button
-                                                                    withModifiers:modifiers
-                                                                               at:coord]
-                                 broadcastAllowed:NO];
+                        [self writeTask:[_terminal.output mousePress:button
+                                                       withModifiers:modifiers
+                                                                  at:coord]];
                     }
                     // If deltaY is 0 we still return YES because the
                     // scrollview moves anyway (likely because our caller is
@@ -5751,7 +5740,7 @@ ITERM_WEAKLY_REFERENCEABLE
     }
     if ([text length] > 0) {
         NSString *aString = [NSString stringWithFormat:@"\e%@", text];
-        [self writeTask:aString];
+        [self writeTask:[aString dataUsingEncoding:_terminal.encoding]];
     }
 }
 
@@ -5769,13 +5758,13 @@ ITERM_WEAKLY_REFERENCEABLE
     return data;
 }
 
-- (void)sendHexCode:(NSString *)codes {
+- (void)sendHexCode:(NSString *)codes
+{
     if (_exited) {
         return;
     }
     if ([codes length]) {
-        [self writeLatin1EncodedData:[self dataForHexCodes:codes]
-                    broadcastAllowed:YES];
+        [self writeTask:[self dataForHexCodes:codes]];
     }
 }
 
@@ -5790,7 +5779,7 @@ ITERM_WEAKLY_REFERENCEABLE
         temp = [temp stringByReplacingEscapedChar:'e' withString:@"\e"];
         temp = [temp stringByReplacingEscapedChar:'a' withString:@"\a"];
         temp = [temp stringByReplacingEscapedChar:'t' withString:@"\t"];
-        [self writeTask:temp];
+        [self writeTask:[temp dataUsingEncoding:_terminal.encoding]];
     }
 }
 
@@ -6145,7 +6134,7 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 - (void)screenWriteDataToTask:(NSData *)data {
-    [self writeLatin1EncodedData:data broadcastAllowed:NO];
+    [self writeTaskNoBroadcast:data];
 }
 
 - (NSRect)screenWindowFrame {
@@ -7241,8 +7230,8 @@ ITERM_WEAKLY_REFERENCEABLE
 
 #pragma mark - iTermPasteHelperDelegate
 
-- (void)pasteHelperWriteString:(NSString *)string {
-    [self writeTask:string];
+- (void)pasteHelperWriteData:(NSData *)data {
+    [self writeTask:data];
 }
 
 - (void)pasteHelperKeyDown:(NSEvent *)event {

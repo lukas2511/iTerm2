@@ -300,9 +300,7 @@ typedef NS_ENUM(NSInteger, BroadcastMode) {
 - (void)toggleBroadcastingInputToSession:(PTYSession *)session;
 
 // Call writeTask: for each session's shell with the given data.
-- (void)sendInputToAllSessions:(NSString *)string
-                      encoding:(NSStringEncoding)optionalEncoding
-                 forceEncoding:(BOOL)forceEncoding;
+- (void)sendInputToAllSessions:(NSData *)data;
 
 #pragma mark - Tmux
 
