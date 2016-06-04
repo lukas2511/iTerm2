@@ -7,6 +7,7 @@
 //
 
 #import "iTermAboutWindowController.h"
+#import "NSArray+iTerm.h"
 #import "NSStringITerm.h"
 
 @implementation iTermAboutWindowController {
@@ -82,14 +83,23 @@
 }
 
 - (NSAttributedString *)patronsString {
-    NSString *patrons = @"Aaron Kulbe, Filip, Ozzy Johnson, and Stefan Countryman";
+    NSArray *patronNames = @[ @"Aaron Kulbe",
+                              @"Filip",
+                              @"Ozzy Johnson",
+                              @"Stefan Countryman",
+                              @"Konstantin Gredeskoul",
+                              @"Mark H Berger" ];
+    NSArray *sortedNames = [patronNames sortedArrayUsingComparator:^NSComparisonResult(id  _Nonnull obj1, id  _Nonnull obj2) {
+        return [[obj1 surname] compare:[obj2 surname]];
+    }];
+    NSString *patrons = [sortedNames componentsJoinedWithOxfordComma];
     NSString *string = [NSString stringWithFormat:@"iTerm2 is generously supported by %@ on ", patrons];
     NSMutableAttributedString *attributedString =
         [[[NSMutableAttributedString alloc] initWithString:string] autorelease];
     NSAttributedString *patreonLink = [self attributedStringWithLinkToURL:@"https://patreon.com/gnachman"
                                                                     title:@"Patreon"];
     [attributedString appendAttributedString:patreonLink];
-    NSAttributedString *period = [[NSAttributedString alloc] initWithString:@"."];
+    NSAttributedString *period = [[[NSAttributedString alloc] initWithString:@"."] autorelease];
     [attributedString appendAttributedString:period];
 
     return attributedString;

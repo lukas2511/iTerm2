@@ -31,6 +31,8 @@
 #import "HotkeyWindowController.h"
 #import "ITAddressBookMgr.h"
 #import "iTermAboutWindowController.h"
+#import "iTermAdvancedSettingsModel.h"
+#import "iTermColorPresets.h"
 #import "iTermController.h"
 #import "iTermExpose.h"
 #import "iTermFileDescriptorSocketPath.h"
@@ -61,6 +63,7 @@
 #import "PTYTab.h"
 #import "PTYTextView.h"
 #import "PTYWindow.h"
+#import "Sparkle/SUStandardVersionComparator.h"
 #import "Sparkle/SUUpdater.h"
 #import "ToastWindowController.h"
 #import "VT100Terminal.h"
@@ -84,10 +87,7 @@ NSString *const kShowFullscreenTabsSettingDidChange = @"kShowFullscreenTabsSetti
 static NSString *const kScreenCharRestorableStateKey = @"kScreenCharRestorableStateKey";
 static NSString *const kHotkeyWindowRestorableState = @"kHotkeyWindowRestorableState";
 
-// There was an older userdefaults key "Multi-Line Paste Warning" that had the opposite semantics.
-// This was changed for compatibility with the iTermWarning mechanism.
-NSString *const kMultiLinePasteWarningUserDefaultsKey = @"NoSyncDoNotWarnBeforeMultilinePaste";
-NSString *const kPasteOneLineWithNewlineAtShellWarningUserDefaultsKey = @"NoSyncDoNotWarnBeforePastingOneLineEndingInNewlineAtShellPrompt";
+static NSString *const kHaveWarnedAboutIncompatibleSoftware = @"NoSyncHaveWarnedAboutIncompatibleSoftware";
 
 static NSString *const kRestoreDefaultWindowArrangementShortcut = @"R";
 
@@ -285,7 +285,117 @@ static BOOL hasBecomeActive = NO;
     }
 }
 
+- (BOOL)shouldNotifyAboutIncompatibleSoftware {
+    // Pending discussions:
+    // Docker: https://github.com/docker/kitematic/pull/855
+    // LaunchBar: https://twitter.com/launchbar/status/620975715278790657?cn=cmVwbHk%3D&refsrc=email
+    // Pathfinder: https://twitter.com/gnachman/status/659409608642007041
+    // Tower: Filed a bug. Tracking with issue 4722 on my side
+    
+    // This is disabled because it looks like everyone is there or almost there. I can remove this
+    // code soon.
+//#define SHOW_INCOMPATIBILITY_WARNING_AT_STARTUP
+
+#ifdef SHOW_INCOMPATIBILITY_WARNING_AT_STARTUP
+    static NSString *const kTimeOfFirstLaunchForIncompatibilityWarnings = @"NoSyncTimeOfFirstLaunchForIncompatibilityWarnings";
+    static const NSTimeInterval kMinimumDelayBeforeWarningAboutIncompatibility = 24 * 60 * 60;
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    NSTimeInterval timeOfFirstLaunchForIncompatibilityWarnings =
+        [[NSUserDefaults standardUserDefaults] doubleForKey:kTimeOfFirstLaunchForIncompatibilityWarnings];
+    if (!timeOfFirstLaunchForIncompatibilityWarnings) {
+        [[NSUserDefaults standardUserDefaults] setDouble:now
+                                                  forKey:kTimeOfFirstLaunchForIncompatibilityWarnings];
+    } else if (now - timeOfFirstLaunchForIncompatibilityWarnings > kMinimumDelayBeforeWarningAboutIncompatibility) {
+        return ![[NSUserDefaults standardUserDefaults] boolForKey:kHaveWarnedAboutIncompatibleSoftware];
+    }
+#endif
+    return NO;
+}
+
+- (NSString *)shortVersionStringOfAppWithBundleId:(NSString *)bundleId {
+    NSString *bundlePath =
+            [[NSWorkspace sharedWorkspace] absolutePathForAppBundleWithIdentifier:bundleId];
+    NSBundle *bundle = [NSBundle bundleWithPath:bundlePath];
+    NSDictionary *info = [bundle infoDictionary];
+    NSString *version = info[@"CFBundleShortVersionString"];
+    return version;
+}
+
+- (BOOL)version:(NSString *)version newerThan:(NSString *)otherVersion {
+    id<SUVersionComparison> comparator = [SUStandardVersionComparator defaultComparator];
+    NSInteger result = [comparator compareVersion:version toVersion:otherVersion];
+    return result == NSOrderedDescending;
+}
+
+- (void)notifyAboutIncompatibleVersionOf:(NSString *)name url:(NSString *)urlString upgradeAvailable:(BOOL)upgradeAvailable {
+    NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+    alert.messageText = @"Incompatible Software Detected";
+    [alert addButtonWithTitle:@"OK"];
+    if (upgradeAvailable) {
+        alert.informativeText = [NSString stringWithFormat:@"You need to upgrade %@ to use it with this version of iTerm2.", name];
+    } else {
+        alert.informativeText = [NSString stringWithFormat:@"You have a version of %@ installed which is not compatible with this version of iTerm2.", name];
+        [alert addButtonWithTitle:@"Learn More"];
+    }
+
+    if ([alert runModal] == NSAlertSecondButtonReturn) {
+        NSURL *url = [NSURL URLWithString:urlString];
+        [[NSWorkspace sharedWorkspace] openURL:url];
+    }
+}
+
+- (BOOL)notifyAboutIncompatibleSoftware {
+    BOOL found = NO;
+
+    NSString *dockerVersion = [self shortVersionStringOfAppWithBundleId:@"com.apple.ScriptEditor.id.dockerquickstartterminalapp"];
+    if (dockerVersion && ![self version:dockerVersion newerThan:@"1.3.0"]) {
+        [self notifyAboutIncompatibleVersionOf:@"Docker Quickstart Terminal"
+                                           url:@"https://gitlab.com/gnachman/iterm2/wikis/dockerquickstartincompatible"
+                              upgradeAvailable:NO];
+        found = YES;
+    }
+
+    NSString *launchBarVersion = [self shortVersionStringOfAppWithBundleId:@"at.obdev.LaunchBar"];
+    if (launchBarVersion && ![self version:launchBarVersion newerThan:@"6.6.2"]) {
+        [self notifyAboutIncompatibleVersionOf:@"LaunchBar"
+                                           url:@"https://gitlab.com/gnachman/iterm2/wikis/dockerquickstartincompatible"
+                              upgradeAvailable:NO];
+        found = YES;
+    }
+
+    NSString *pathfinderVersion = [self shortVersionStringOfAppWithBundleId:@"com.cocoatech.PathFinder"];
+    if (pathfinderVersion && ![self version:pathfinderVersion newerThan:@"7.3.3"]) {
+        [self notifyAboutIncompatibleVersionOf:@"Pathfinder"
+                                           url:@"https://gitlab.com/gnachman/iterm2/wikis/pathfinder7compatibility"
+                              upgradeAvailable:NO];
+        found = YES;
+    }
+
+    NSString *towerVersion = [self shortVersionStringOfAppWithBundleId:@"com.fournova.Tower2"];
+    if (towerVersion && ![self version:towerVersion newerThan:@"2.3.4"]) {
+        [self notifyAboutIncompatibleVersionOf:@"Tower"
+                                           url:@"https://gitlab.com/gnachman/iterm2/wikis/towercompatibility"
+                              upgradeAvailable:NO];
+        found = YES;
+    }
+    
+    [[NSUserDefaults standardUserDefaults] setBool:YES forKey:kHaveWarnedAboutIncompatibleSoftware];
+    return found;
+}
+
+- (IBAction)checkForIncompatibleSoftware:(id)sender {
+    if (![self notifyAboutIncompatibleSoftware]) {
+        NSAlert *alert = [[[NSAlert alloc] init] autorelease];
+        alert.messageText = @"No Incompatible Software Detected";
+        alert.informativeText = @"No third-party software that is known to be incompatible with iTerm2’s new Applescript interfaces was found.";
+        [alert addButtonWithTitle:@"OK"];
+        [alert runModal];
+    }
+}
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
+    if ([self shouldNotifyAboutIncompatibleSoftware]) {
+        [self notifyAboutIncompatibleSoftware];
+    }
     if (IsMavericksOrLater() && [iTermAdvancedSettingsModel disableAppNap]) {
         [[NSProcessInfo processInfo] setAutomaticTerminationSupportEnabled:YES];
         [[NSProcessInfo processInfo] disableAutomaticTermination:@"User Preference"];
@@ -480,8 +590,13 @@ static BOOL hasBecomeActive = NO;
     DLog(@"application:%@ openFile:%@", theApplication, filename);
     if ([filename hasSuffix:@".itermcolors"]) {
         DLog(@"Importing color presets from %@", filename);
-        if ([[PreferencePanel sharedInstance] importColorPresetFromFile:filename]) {
-            NSRunAlertPanel(@"Colors Scheme Imported", @"The color scheme was imported and added to presets. You can find it under Preferences>Profiles>Colors>Load Presets….", @"OK", nil, nil);
+        if ([iTermColorPresets importColorPresetFromFile:filename]) {
+            NSRunAlertPanel(@"Colors Scheme Imported",
+                            @"The color scheme was imported and added to presets. You can find it "
+                             "under Preferences>Profiles>Colors>Load Presets….",
+                            @"OK",
+                            nil,
+                            nil);
         }
         return YES;
     }
@@ -1119,9 +1234,7 @@ static BOOL hasBecomeActive = NO;
 }
 
 - (IBAction)toggleMultiLinePasteWarning:(id)sender {
-    NSUserDefaults *userDefaults = [NSUserDefaults standardUserDefaults];
-    [userDefaults setBool:![userDefaults boolForKey:kMultiLinePasteWarningUserDefaultsKey]
-                   forKey:kMultiLinePasteWarningUserDefaultsKey];
+    [iTermAdvancedSettingsModel setNoSyncDoNotWarnBeforeMultilinePaste:![iTermAdvancedSettingsModel noSyncDoNotWarnBeforeMultilinePaste]];
 }
 
 - (int)promptForNumberOfSpacesToConverTabsToWithDefault:(int)defaultValue {
@@ -1168,8 +1281,7 @@ static BOOL hasBecomeActive = NO;
         // In a test.
         return YES;
     }
-    NSUserDefaults *userDefaults = [NSUserDefaults standardUserDefaults];
-    return ![userDefaults boolForKey:kMultiLinePasteWarningUserDefaultsKey];
+    return ![iTermAdvancedSettingsModel noSyncDoNotWarnBeforeMultilinePaste];
 }
 
 - (IBAction)maximizePane:(id)sender
@@ -1226,6 +1338,18 @@ static BOOL hasBecomeActive = NO;
                     [window makeFirstResponder:view];
                     break;
                 }
+            }
+        }
+    }
+    
+    [self hideStuckToolTips];
+}
+
+- (void)hideStuckToolTips {
+    if ([iTermAdvancedSettingsModel hideStuckTooltips]) {
+        for (NSWindow *window in [NSApp windows]) {
+            if ([NSStringFromClass([window class]) isEqualToString:@"NSToolTipPanel"]) {
+                [window close];
             }
         }
     }
@@ -1565,6 +1689,10 @@ static BOOL hasBecomeActive = NO;
     } else {
         return YES;
     }
+}
+
+- (IBAction)showHelp:(id)sender {
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://www.iterm2.com/documentation.html"]];
 }
 
 - (IBAction)buildScriptMenu:(id)sender {

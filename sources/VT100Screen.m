@@ -802,7 +802,7 @@ static NSString *const kInilineFileInset = @"inset";  // NSValue of NSEdgeInsets
         linesDropped = [linebuffer_ dropExcessLinesWithWidth:currentGrid_.size.width];
         [self incrementOverflowBy:linesDropped];
     }
-    int lines = [linebuffer_ numLinesWithWidth:currentGrid_.size.width];
+    int lines __attribute__((unused)) = [linebuffer_ numLinesWithWidth:currentGrid_.size.width];
     NSAssert(lines >= 0, @"Negative lines");
 
     // An immediate refresh is needed so that the size of textview can be
@@ -811,15 +811,17 @@ static NSString *const kInilineFileInset = @"inset";  // NSValue of NSEdgeInsets
     [delegate_ screenNeedsRedraw];
     [selection clearSelection];
     if (couldHaveSelection) {
+        NSMutableArray *subSelectionsToAdd = [NSMutableArray array];
         for (iTermSubSelection* sub in newSubSelections) {
             VT100GridCoordRange newSelection = sub.range.coordRange;
             if (newSelection.start.y >= linesDropped &&
                 newSelection.end.y >= linesDropped) {
                 newSelection.start.y -= linesDropped;
                 newSelection.end.y -= linesDropped;
-                [selection addSubSelection:sub];
+                [subSelectionsToAdd addObject:sub];
             }
         }
+        [selection addSubSelections:subSelectionsToAdd];
     }
 
     [self reloadMarkCache];
@@ -3723,10 +3725,35 @@ static NSString *const kInilineFileInset = @"inset";  // NSValue of NSEdgeInsets
    */
 }
 
+// version is formatted as
+// <version number>;<key>=<value>;<key>=<value>...
+// Older scripts may have only a version number and no key-value pairs.
+// The only defined key is "shell", and the value will be tcsh, bash, zsh, or fish.
 - (void)terminalSetShellIntegrationVersion:(NSString *)version {
-    int versionNumber = [version integerValue];
-    static int kLatestKnownVersion = 1;
-    if (versionNumber < kLatestKnownVersion) {
+    NSArray *parts = [version componentsSeparatedByString:@";"];
+    NSString *shell = nil;
+    NSInteger versionNumber = [parts[0] integerValue];
+    if (parts.count >= 2) {
+        NSMutableDictionary *params = [NSMutableDictionary dictionary];
+        for (NSString *kvp in [parts subarrayWithRange:NSMakeRange(1, parts.count - 1)]) {
+            NSRange equalsRange = [kvp rangeOfString:@"="];
+            if (equalsRange.location == NSNotFound) {
+                continue;
+            }
+            NSString *key = [kvp substringToIndex:equalsRange.location];
+            NSString *value = [kvp substringFromIndex:NSMaxRange(equalsRange)];
+            params[key] = value;
+        }
+        shell = params[@"shell"];
+    }
+    
+    NSDictionary<NSString *, NSNumber *> *lastVersionByShell =
+        @{ @"tcsh": @2,
+           @"bash": @2,
+           @"zsh": @2,
+           @"fish": @2 };
+    NSInteger latestKnownVersion = [lastVersionByShell[shell ?: @""] integerValue];
+    if (!shell || versionNumber < latestKnownVersion) {
         [delegate_ screenSuggestShellIntegrationUpgrade];
     }
 }
@@ -4185,11 +4212,12 @@ static void SwapInt(int *a, int *b) {
     screen_char_t* dummy = calloc(currentGrid_.size.width, sizeof(screen_char_t));
     for (i = 0; i < linesPushed; ++i) {
         int cont;
-        BOOL isOk = [linebuffer_ popAndCopyLastLineInto:dummy
-                                                  width:currentGrid_.size.width
-                                      includesEndOfLine:&cont
-                                              timestamp:NULL
-                                           continuation:NULL];
+        BOOL isOk __attribute__((unused)) =
+            [linebuffer_ popAndCopyLastLineInto:dummy
+                                          width:currentGrid_.size.width
+                              includesEndOfLine:&cont
+                                      timestamp:NULL
+                                   continuation:NULL];
         NSAssert(isOk, @"Pop shouldn't fail");
     }
     free(dummy);

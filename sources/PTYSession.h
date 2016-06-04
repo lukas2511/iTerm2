@@ -212,9 +212,6 @@ typedef enum {
 // Array of subprocessess names.
 @property(nonatomic, readonly) NSArray *childJobNames;
 
-// Time since reference date when last output was receivced.
-@property(nonatomic, readonly) NSTimeInterval lastOutput;
-
 // Is the session idle? Used by updateLabelAttributes to send a growl message when processing ends.
 @property(nonatomic, assign) BOOL havePostedIdleNotification;
 
@@ -491,9 +488,17 @@ typedef enum {
 
 - (BOOL)shouldSendEscPrefixForModifier:(unsigned int)modmask;
 
-// Writing output.
-- (void)writeTask:(NSData*)data;
-- (void)writeTaskNoBroadcast:(NSData *)data;
+// Writes output as though a key was pressed. Broadcast allowed. Supports tmux integration properly.
+- (void)writeTask:(NSString *)string;
+
+// Writes output as though a key was pressed. Does not broadcast. Supports tmux integration properly.
+- (void)writeTaskNoBroadcast:(NSString *)string;
+
+// Write with a particular encoding. If the encoding is just session.terminal.encoding then pass
+// NO for `forceEncoding` and the terminal's encoding will be used instead of `optionalEncoding`.
+- (void)writeTaskNoBroadcast:(NSString *)string
+                    encoding:(NSStringEncoding)optionalEncoding
+               forceEncoding:(BOOL)forceEncoding;
 
 // PTYTextView
 - (BOOL)hasTextSendingKeyMappingForEvent:(NSEvent*)event;
@@ -520,6 +525,11 @@ typedef enum {
 // a scrollbar.
 - (NSSize)idealScrollViewSizeWithStyle:(NSScrollerStyle)scrollerStyle;
 
+// Update the scrollbar's visibility and style. Returns YES if a change was made.
+// This is the one and only way that scrollbars should be changed after initialization. It ensures
+// the content view's frame is updated.
+- (BOOL)setScrollBarVisible:(BOOL)visible style:(NSScrollerStyle)style;
+
 // Change the size of the session and its tty.
 - (void)setSize:(VT100GridSize)size;
 
@@ -540,8 +550,6 @@ typedef enum {
 - (void)clearScrollbackBuffer;
 - (void)logStart;
 - (void)logStop;
-
-- (void)sendCommand:(NSString *)command;
 
 // Display timer stuff
 - (void)updateDisplay;
@@ -630,6 +638,8 @@ typedef enum {
 
 // Show an announcement explaining why a restored session is an orphan.
 - (void)showOrphanAnnouncement;
+
+- (BOOL)hasAnnouncementWithIdentifier:(NSString *)identifier;
 
 // Change the current profile but keep the name the same.
 - (void)setProfile:(NSDictionary *)newProfile preservingName:(BOOL)preserveName;

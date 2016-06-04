@@ -127,11 +127,13 @@ static NSDate* lastResizeDate_;
 }
 
 - (void)resizeSubviewsWithOldSize:(NSSize)oldBoundsSize {
+    [self updateLayout];
+}
+
+- (void)updateLayout {
     if ([_delegate sessionViewShouldUpdateSubviewsFramesAutomatically]) {
-        CGFloat titleHeight = 0;
         if (self.showTitle) {
             [self updateTitleFrame];
-            titleHeight = NSHeight(_title.frame);
         } else {
             [self updateScrollViewFrame];
             [self updateFindViewFrame];
@@ -516,6 +518,9 @@ static NSDate* lastResizeDate_;
 - (NSSize)compactFrame {
     NSSize cellSize = [_delegate sessionViewCellSize];
     VT100GridSize gridSize = [_delegate sessionViewGridSize];
+    DLog(@"Compute smallest frame that contains a grid of size %@ with cell size %@",
+         VT100GridSizeDescription(gridSize), NSStringFromSize(cellSize));
+    
     NSSize dim = NSMakeSize(gridSize.width, gridSize.height);
     NSSize innerSize = NSMakeSize(cellSize.width * dim.width + MARGIN * 2,
                                   cellSize.height * dim.height + VMARGIN * 2);
@@ -531,6 +536,7 @@ static NSDate* lastResizeDate_;
     if (_showTitle) {
         size.height += kTitleHeight;
     }
+    DLog(@"Smallest such frame is %@", NSStringFromSize(size));
     return size;
 }
 
